@@ -60,7 +60,6 @@ jobs:
           :app:testPlaystoreDebugUnitTest
           :app:assembleFullDebug
           :app:assemblePlaystoreDebug
-          --info
           --stacktrace
 
       - name: Upload fullDebug APK
