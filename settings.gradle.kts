@@ -7,6 +7,17 @@ pluginManagement {
         }
     }
     repositories {
+        exclusiveContent {
+            forRepository {
+                maven {
+                    name = "AndroidGradlePluginMirror"
+                    url = uri("https://maven.aliyun.com/repository/google")
+                }
+            }
+            filter {
+                includeGroup("com.android.tools.build")
+            }
+        }
         maven("https://maven.myket.ir")
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/gradle-plugin")
