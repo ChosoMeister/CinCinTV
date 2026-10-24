@@ -228,7 +228,8 @@ class StreamRepositoryPluginIsolationTest {
                     every { isNativeRequest(any()) } returns false
                     every { revision } returns 0
                     every { sources(any(), any(), any(), any(), any()) } returns emptyList()
-                }
+                },
+                hamechizdanCatalogProvider = mockk(relaxed = true)
             ),
             api = api,
             tmdbService = tmdbService,

@@ -307,7 +307,8 @@ class TraktPublicListSourceResolverTest {
             context = context,
             traktApi = api,
             traktAuthDataStore = authStore,
-            authSessionNoticeDataStore = mockk<AuthSessionNoticeDataStore>(relaxed = true)
+            authSessionNoticeDataStore = mockk<AuthSessionNoticeDataStore>(relaxed = true),
+            oauthConfig = com.nuvio.tv.data.repository.TraktOAuthConfig("test-client", "test-secret", "test://callback")
         )
         return TraktPublicListSourceResolver(
             appContext = context,

@@ -264,6 +264,7 @@ class AddonManifestPlaceholderTest {
                 addonSyncService = mockk<AddonSyncService>(relaxed = true),
                 authManager = mockk<AuthManager>(relaxed = true),
                 context = newContext(),
+                hamechizdanCatalogProvider = mockk(relaxed = true),
                 dispatcher = dispatcher,
                 clock = clock
             ),

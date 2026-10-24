@@ -28,6 +28,7 @@ import com.nuvio.tv.data.remote.dto.trakt.TraktWatchedMovieItemDto
 import com.nuvio.tv.data.remote.dto.trakt.TraktWatchedShowItemDto
 import com.nuvio.tv.domain.model.WatchProgress
 import com.nuvio.tv.domain.repository.MetaRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -1077,12 +1078,25 @@ class TraktProgressService @Inject constructor(
         val generation = refreshGeneration.get()
 
         supervisorScope {
-            val hiddenDeferred = async { runCatching { ensureHiddenProgressShows(force = force) } }
+            val hiddenDeferred = async {
+                try {
+                    ensureHiddenProgressShows(force = force)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    Log.w(TAG, "ensureHiddenProgressShows failed", error)
+                }
+            }
 
             val watchedMoviesDeferred: Deferred<Set<String>>? = if (refetchWatched || watchedMoviesStale || !hasLoadedWatchedMovies) {
                 async {
-                    try { getWatchedMoviesSnapshot(forceRefresh = refetchWatched || hasLoadedWatchedMovies) }
-                    catch (_: Exception) { emptySet() }
+                    try {
+                        getWatchedMoviesSnapshot(forceRefresh = refetchWatched || hasLoadedWatchedMovies)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        emptySet()
+                    }
                 }
             } else null
 
@@ -1090,8 +1104,13 @@ class TraktProgressService @Inject constructor(
             val progressDeferred = async { fetchAllProgressSnapshot(force = force || progressRecheckDue) }
             val seedsDeferred: Deferred<List<WatchProgress>>? = if (needSeedsRefresh) {
                 async {
-                    try { getWatchedShowSeedsSnapshot(forceRefresh = refetchWatched || hasLoadedWatchedShowSeeds) }
-                    catch (_: Exception) { emptyList() }
+                    try {
+                        getWatchedShowSeedsSnapshot(forceRefresh = refetchWatched || hasLoadedWatchedShowSeeds)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        emptyList()
+                    }
                 }
             } else null
 
@@ -1099,15 +1118,29 @@ class TraktProgressService @Inject constructor(
 
             val snapshot = try {
                 progressDeferred.await()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 Log.w(TAG, "fetchAllProgressSnapshot failed, keeping existing snapshot", e)
                 null
             }
             watchedMoviesDeferred?.let {
-                try { it.await() } catch (_: Exception) { }
+                try {
+                    it.await()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Keep the prior watched movie cache when this auxiliary fetch fails.
+                }
             }
             seedsDeferred?.let {
-                try { it.await() } catch (_: Exception) { }
+                try {
+                    it.await()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // Keep the prior watched show seeds when this auxiliary fetch fails.
+                }
             }
 
             if (snapshot == null) {

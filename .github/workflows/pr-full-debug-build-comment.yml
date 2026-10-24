@@ -48,7 +48,7 @@ jobs:
               return;
             }
 
-            const marker = "<!-- nuvio-full-debug-build -->";
+            const marker = "<!-- cincin-android-variants-check -->";
             const runUrl = run.html_url;
             const artifactName = "app-full-universal-debug.apk";
             let body;
@@ -67,7 +67,7 @@ jobs:
 
               body = [
                 marker,
-                "Full debug APK build completed successfully.",
+                "Android variant tests and debug builds completed successfully.",
                 "",
                 artifact
                   ? `[Download APK](${artifactUrl})`
@@ -76,7 +76,7 @@ jobs:
             } else {
               body = [
                 marker,
-                "Full debug APK build failed.",
+                "Android variant verification failed.",
                 "",
                 `Logs: ${runUrl}`,
                 "",

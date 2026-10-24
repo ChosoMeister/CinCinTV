@@ -20,6 +20,7 @@ import com.nuvio.tv.domain.model.StreamBehaviorHints
 import com.nuvio.tv.domain.model.Video
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.util.zip.GZIPInputStream
 import javax.inject.Inject
@@ -182,45 +183,18 @@ class HamechizdanCatalogProvider @Inject constructor(
             val startMs = System.currentTimeMillis()
             val items = try {
                 val updatedFile = File(context.filesDir, CACHED_UPDATE_FILE_NAME)
-                if (updatedFile.exists() && updatedFile.length() > 1024) {
-                    GZIPInputStream(updatedFile.inputStream()).use { gzip ->
-                        InputStreamReader(gzip, Charsets.UTF_8).use { reader ->
-                            gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
-                        }
+                val updatedItems = if (updatedFile.exists() && updatedFile.length() > 1024) {
+                    val parsed = runCatching { readGzipCatalog(updatedFile.inputStream()) }
+                        .onFailure { Log.w(TAG, "Updated Hamechizdan catalog is unreadable; using bundled catalog", it) }
+                        .getOrNull()
+                    if (parsed != null && parsed.isEmpty()) {
+                        Log.w(TAG, "Updated Hamechizdan catalog is empty; using bundled catalog")
                     }
+                    parsed?.takeIf { it.isNotEmpty() }
                 } else {
-                    val assetList = context.assets.list("")?.toSet().orEmpty()
-                    when {
-                        ASSET_FILE_NAME in assetList -> {
-                            GZIPInputStream(context.assets.open(ASSET_FILE_NAME)).use { gzip ->
-                                InputStreamReader(gzip, Charsets.UTF_8).use { reader ->
-                                    gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
-                                }
-                            }
-                        }
-                        LEGACY_ASSET_FILE_NAME in assetList -> {
-                            GZIPInputStream(context.assets.open(LEGACY_ASSET_FILE_NAME)).use { gzip ->
-                                InputStreamReader(gzip, Charsets.UTF_8).use { reader ->
-                                    gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
-                                }
-                            }
-                        }
-                        UNCOMPRESSED_ASSET_FILE_NAME in assetList -> {
-                            context.assets.open(UNCOMPRESSED_ASSET_FILE_NAME).use { raw ->
-                                InputStreamReader(raw, Charsets.UTF_8).use { reader ->
-                                    gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
-                                }
-                            }
-                        }
-                        else -> {
-                            GZIPInputStream(context.assets.open(ASSET_FILE_NAME)).use { gzip ->
-                                InputStreamReader(gzip, Charsets.UTF_8).use { reader ->
-                                    gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
-                                }
-                            }
-                        }
-                    }
+                    null
                 }
+                updatedItems ?: loadBundledCatalog()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load Hamechizdan catalog asset", e)
                 emptyList()
@@ -268,6 +242,27 @@ class HamechizdanCatalogProvider @Inject constructor(
             loadedItems = items
             Log.d(TAG, "Loaded ${items.size} Hamechizdan titles in ${System.currentTimeMillis() - startMs}ms")
             return items
+        }
+    }
+
+    private fun readGzipCatalog(input: InputStream): List<CompactItem> =
+        GZIPInputStream(input).use { gzip ->
+            InputStreamReader(gzip, Charsets.UTF_8).use { reader ->
+                gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
+            }
+        }
+
+    private fun loadBundledCatalog(): List<CompactItem> {
+        val assetList = context.assets.list("")?.toSet().orEmpty()
+        return when {
+            ASSET_FILE_NAME in assetList -> readGzipCatalog(context.assets.open(ASSET_FILE_NAME))
+            LEGACY_ASSET_FILE_NAME in assetList -> readGzipCatalog(context.assets.open(LEGACY_ASSET_FILE_NAME))
+            UNCOMPRESSED_ASSET_FILE_NAME in assetList -> context.assets.open(UNCOMPRESSED_ASSET_FILE_NAME).use { raw ->
+                InputStreamReader(raw, Charsets.UTF_8).use { reader ->
+                    gson.fromJson(reader, CompactCatalogBundle::class.java)?.items.orEmpty()
+                }
+            }
+            else -> readGzipCatalog(context.assets.open(ASSET_FILE_NAME))
         }
     }
 
