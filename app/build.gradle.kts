@@ -119,11 +119,31 @@ val useLocalFfmpegDecoder = truthy(
 val releaseStoreFilePath = env("NUVIO_RELEASE_STORE_FILE")
     ?: localProperties.getProperty("NUVIO_RELEASE_STORE_FILE")
 val releaseKeyAliasValue = env("NUVIO_RELEASE_KEY_ALIAS")
-    ?: localProperties.getProperty("NUVIO_RELEASE_KEY_ALIAS", "nuviotv")
+    ?: localProperties.getProperty("NUVIO_RELEASE_KEY_ALIAS")
 val releaseKeyPasswordValue = env("NUVIO_RELEASE_KEY_PASSWORD")
-    ?: localProperties.getProperty("NUVIO_RELEASE_KEY_PASSWORD", "815787")
+    ?: localProperties.getProperty("NUVIO_RELEASE_KEY_PASSWORD")
 val releaseStorePasswordValue = env("NUVIO_RELEASE_STORE_PASSWORD")
-    ?: localProperties.getProperty("NUVIO_RELEASE_STORE_PASSWORD", "815787")
+    ?: localProperties.getProperty("NUVIO_RELEASE_STORE_PASSWORD")
+val releaseSigningFile = releaseStoreFilePath?.let(::file)
+val releaseArtifactRequested = gradle.startParameter.taskNames.any { requestedTask ->
+    val taskName = requestedTask.substringAfterLast(':')
+    taskName.contains("release", ignoreCase = true) &&
+        listOf("assemble", "bundle", "package", "install").any { prefix ->
+            taskName.startsWith(prefix, ignoreCase = true)
+        }
+}
+if (releaseArtifactRequested && !useDebugReleaseSigning) {
+    val missing = buildList {
+        if (releaseSigningFile == null) add("NUVIO_RELEASE_STORE_FILE")
+        else if (!releaseSigningFile.isFile) add("existing NUVIO_RELEASE_STORE_FILE")
+        if (releaseKeyAliasValue.isNullOrBlank()) add("NUVIO_RELEASE_KEY_ALIAS")
+        if (releaseKeyPasswordValue.isNullOrBlank()) add("NUVIO_RELEASE_KEY_PASSWORD")
+        if (releaseStorePasswordValue.isNullOrBlank()) add("NUVIO_RELEASE_STORE_PASSWORD")
+    }
+    check(missing.isEmpty()) {
+        "Release signing is not configured. Set ${missing.joinToString()} or explicitly use CI_USE_DEBUG_SIGNING=true for non-release artifacts."
+    }
+}
 
 android {
     namespace = "com.nuvio.tv"
@@ -213,9 +233,9 @@ android {
 
     signingConfigs {
         create("release") {
-            keyAlias = releaseKeyAliasValue
+            keyAlias = releaseKeyAliasValue.orEmpty()
             keyPassword = releaseKeyPasswordValue
-            storeFile = releaseStoreFilePath?.let(::file) ?: file("../nuviotv.jks")
+            storeFile = releaseSigningFile ?: file("../nuviotv.jks")
             storePassword = releaseStorePasswordValue
         }
     }

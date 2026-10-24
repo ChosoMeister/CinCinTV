@@ -11,6 +11,7 @@ import com.nuvio.tv.data.remote.api.AuthDiagnosticReportApi
 import com.nuvio.tv.data.remote.api.GitHubReleaseApi
 import com.nuvio.tv.data.remote.api.SupportersApi
 import com.nuvio.tv.data.remote.api.TraktApi
+import com.nuvio.tv.data.repository.TraktOAuthConfig
 import com.nuvio.tv.data.remote.api.TrailerApi
 import com.nuvio.tv.data.remote.api.IntroDbApi
 import com.nuvio.tv.data.remote.api.ImdbTapframeApi
@@ -91,6 +92,14 @@ private fun buildAcceptLanguageHeader(): String {
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
+
+    @Provides
+    @Singleton
+    fun provideTraktOAuthConfig(): TraktOAuthConfig = TraktOAuthConfig(
+        clientId = BuildConfig.TRAKT_CLIENT_ID,
+        clientSecret = BuildConfig.TRAKT_CLIENT_SECRET,
+        redirectUri = BuildConfig.TRAKT_REDIRECT_URI
+    )
 
     @Provides
     @Singleton

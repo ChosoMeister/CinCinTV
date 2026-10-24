@@ -89,6 +89,13 @@ jobs:
 
       - name: Configure signing keystore and local.properties
         run: |
+          set -euo pipefail
+
+          : "${RELEASE_KEYSTORE_BASE64:?Missing NUVIO_RELEASE_KEYSTORE_BASE64 repository secret}"
+          : "${RELEASE_KEY_ALIAS:?Missing NUVIO_RELEASE_KEY_ALIAS repository secret}"
+          : "${RELEASE_KEY_PASSWORD:?Missing NUVIO_RELEASE_KEY_PASSWORD repository secret}"
+          : "${RELEASE_STORE_PASSWORD:?Missing NUVIO_RELEASE_STORE_PASSWORD repository secret}"
+
           if [ -n "$LOCAL_PROPERTIES_BASE64" ]; then
             printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
           else
@@ -102,35 +109,21 @@ jobs:
           fi
 
           KEYSTORE_PATH="$RUNNER_TEMP/cincintv-release.jks"
-          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
-            echo "Using repository secret keystore NUVIO_RELEASE_KEYSTORE_BASE64..."
-            printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-            KEY_ALIAS="${RELEASE_KEY_ALIAS:-nuviotv}"
-            KEY_PASS="${RELEASE_KEY_PASSWORD:-815787}"
-            STORE_PASS="${RELEASE_STORE_PASSWORD:-815787}"
-          else
-            echo "Generating deterministic release keystore for CinCin TV..."
-            keytool -genkeypair \
-              -v \
-              -keystore "$KEYSTORE_PATH" \
-              -storepass 815787 \
-              -alias cincintv \
-              -keypass 815787 \
-              -dname "CN=CinCin TV,O=CinCin,C=US" \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000
-            KEY_ALIAS="cincintv"
-            KEY_PASS="815787"
-            STORE_PASS="815787"
-          fi
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          keytool -exportcert -rfc \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass "$RELEASE_STORE_PASSWORD" \
+            -alias "$RELEASE_KEY_ALIAS" \
+            -keypass "$RELEASE_KEY_PASSWORD" \
+            -file "$RUNNER_TEMP/cincintv-release-cert.pem" >/dev/null
+          rm -f "$RUNNER_TEMP/cincintv-release-cert.pem"
 
           sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE|NUVIO_RELEASE_KEY_ALIAS|NUVIO_RELEASE_KEY_PASSWORD|NUVIO_RELEASE_STORE_PASSWORD)[[:space:]]*=/d' local.properties
           {
             echo "NUVIO_RELEASE_STORE_FILE=$KEYSTORE_PATH"
-            echo "NUVIO_RELEASE_KEY_ALIAS=$KEY_ALIAS"
-            echo "NUVIO_RELEASE_KEY_PASSWORD=$KEY_PASS"
-            echo "NUVIO_RELEASE_STORE_PASSWORD=$STORE_PASS"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$RELEASE_KEY_PASSWORD"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$RELEASE_STORE_PASSWORD"
           } >> local.properties
 
       - name: Build Full Release APKs (Android & Android TV)

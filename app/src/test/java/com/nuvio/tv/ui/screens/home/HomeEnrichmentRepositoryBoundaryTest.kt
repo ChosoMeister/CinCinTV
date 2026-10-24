@@ -111,7 +111,13 @@ class HomeEnrichmentRepositoryBoundaryTest {
         val addonRepository = mockk<AddonRepository>(relaxed = true) {
             every { getInstalledAddons() } returns flowOf(listOf(metaAddon()))
         }
-        return MetaRepositoryImpl(context = context, api = api, addonRepository = addonRepository, serverCatalog = mockk(relaxed = true))
+        return MetaRepositoryImpl(
+            context = context,
+            api = api,
+            addonRepository = addonRepository,
+            serverCatalog = mockk(relaxed = true),
+            hamechizdanCatalogProvider = mockk(relaxed = true)
+        )
     }
 
     /** Deliberately not the catalog source, or the lookup short-circuits as source-sufficient. */

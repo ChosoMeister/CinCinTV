@@ -89,7 +89,8 @@ class MetaRepositoryAddonCacheTest {
             context = context,
             api = api,
             addonRepository = addonRepository,
-            serverCatalog = mockk(relaxed = true)
+            serverCatalog = mockk(relaxed = true),
+            hamechizdanCatalogProvider = mockk(relaxed = true)
         )
     }
 

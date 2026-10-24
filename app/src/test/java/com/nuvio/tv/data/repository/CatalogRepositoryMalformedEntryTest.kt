@@ -46,7 +46,8 @@ class CatalogRepositoryMalformedEntryTest {
             context = mockk<Context>(relaxed = true),
             api = api,
             layoutPreferenceDataStore = layoutPrefs,
-            serverCatalog = mockk(relaxed = true)
+            serverCatalog = mockk(relaxed = true),
+            hamechizdanCatalogProvider = mockk(relaxed = true)
         )
 
         val result = repository.getCatalog(
