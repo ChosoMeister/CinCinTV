@@ -1,4 +1,11 @@
 pluginManagement {
+    resolutionStrategy {
+        eachPlugin {
+            if (requested.id.id.startsWith("com.android.") && requested.version != null) {
+                useModule("com.android.tools.build:gradle:${requested.version}")
+            }
+        }
+    }
     repositories {
         maven("https://maven.myket.ir")
         maven("https://maven.aliyun.com/repository/google")
