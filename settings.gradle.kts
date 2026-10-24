@@ -3,7 +3,6 @@ pluginManagement {
         eachPlugin {
             if (requested.id.id.startsWith("com.android.") && requested.version != null) {
                 useModule("com.android.tools.build:gradle:${requested.version}")
-                }
             }
         }
     }
