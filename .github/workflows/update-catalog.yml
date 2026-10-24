@@ -1,0 +1,85 @@
+name: Update Catalog Metadata & Binary Asset
+
+on:
+  # Trigger 1: Automatically rebuilds hamechizdan_catalog.bin ONLY when catalog database files are updated/pushed
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "catalog-pipeline/data/**"
+  # Trigger 2: Manual execution from GitHub Actions tab (NO cron/scheduled scraping so VIP expiry never causes issues)
+  workflow_dispatch:
+    inputs:
+      fetch_new_from_sites:
+        description: "Crawl new titles from Hamechizdan/iToons (ONLY enable if active VIP cookies are set in Secrets)"
+        required: true
+        type: boolean
+        default: false
+      commit_changes:
+        description: "Commit updated hamechizdan_catalog.bin back to the branch"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-catalog-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update-catalog:
+    name: Build Catalog Binary from Database
+    # Prevent infinite loop when github-actions[bot] commits the updated binary
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Rebuild catalog binary (Offline DB + TMDB, or Manual VIP Sync)
+        env:
+          FETCH_FROM_SITES: ${{ inputs.fetch_new_from_sites == true && 'true' || 'false' }}
+          HAMECHIZDAN_COOKIE: ${{ secrets.HAMECHIZDAN_COOKIE }}
+          ITOONS_COOKIE: ${{ secrets.ITOONS_COOKIE }}
+          TMDB_BEARER_TOKEN: ${{ secrets.TMDB_BEARER_TOKEN }}
+        run: |
+          if [ "$FETCH_FROM_SITES" = "true" ]; then
+            echo "Running manual VIP site sync + catalog build..."
+            node catalog-pipeline/scripts/09_auto_sync_and_build_catalog.mjs
+          else
+            echo "Building hamechizdan_catalog.bin directly from preserved local database (catalog-pipeline/data/*.gz)..."
+            node catalog-pipeline/scripts/08_merge_itoons_and_build_catalog.mjs
+          fi
+
+      - name: Upload updated catalog binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cincintv-catalog-bundle
+          path: |
+            app/src/main/assets/hamechizdan_catalog.bin
+            catalog-pipeline/data/hamechizdan_titles_metadata.csv
+          retention-days: 14
+
+      - name: Commit and push updated catalog binary if changed
+        if: ${{ github.event_name == 'push' || inputs.commit_changes == true }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/hamechizdan_catalog.bin catalog-pipeline/data/
+          if git diff --staged --quiet; then
+            echo "Catalog binary is already up-to-date."
+          else
+            git commit -m "chore(catalog): rebuild hamechizdan_catalog.bin from updated catalog database [skip ci]"
+            git push
+          fi

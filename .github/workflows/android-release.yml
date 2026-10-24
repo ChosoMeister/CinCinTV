@@ -1,0 +1,216 @@
+name: Build & Release CinCin TV APKs (Android & Android TV)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Release tag (e.g. v2.0.0) - leave empty to read versionName from app/build.gradle.kts"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark GitHub Release as pre-release / beta"
+        required: true
+        type: boolean
+        default: false
+      draft:
+        description: "Create as Draft Release"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build & Publish Android / Android TV APKs
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      LOCAL_PROPERTIES_BASE64: ${{ secrets.LOCAL_PROPERTIES_BASE64 }}
+      LOCAL_DEV_PROPERTIES_BASE64: ${{ secrets.LOCAL_DEV_PROPERTIES_BASE64 }}
+      RELEASE_KEYSTORE_BASE64: ${{ secrets.NUVIO_RELEASE_KEYSTORE_BASE64 }}
+      RELEASE_KEY_ALIAS: ${{ secrets.NUVIO_RELEASE_KEY_ALIAS }}
+      RELEASE_KEY_PASSWORD: ${{ secrets.NUVIO_RELEASE_KEY_PASSWORD }}
+      RELEASE_STORE_PASSWORD: ${{ secrets.NUVIO_RELEASE_STORE_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Verify or build embedded catalog binary (hamechizdan_catalog.bin)
+        run: |
+          if [ ! -f "app/src/main/assets/hamechizdan_catalog.bin" ]; then
+            echo "Building hamechizdan_catalog.bin from compressed dataset..."
+            node catalog-pipeline/scripts/08_merge_itoons_and_build_catalog.mjs
+          else
+            ls -lh app/src/main/assets/hamechizdan_catalog.bin
+          fi
+
+      - name: Determine release version and tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.version_tag }}
+        run: |
+          GRADLE_VERSION=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' app/build.gradle.kts | head -n 1)
+          GRADLE_CODE=$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*([0-9]+).*$/\1/p' app/build.gradle.kts | head -n 1)
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          elif [[ -n "${INPUT_TAG}" ]]; then
+            RAW_TAG="${INPUT_TAG}"
+          else
+            RAW_TAG="v${GRADLE_VERSION}"
+          fi
+          CLEAN_VER="${RAW_TAG#v}"
+          echo "tag=${RAW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "version_code=${GRADLE_CODE}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure signing keystore and local.properties
+        run: |
+          if [ -n "$LOCAL_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_PROPERTIES_BASE64" | base64 --decode > local.properties
+          else
+            touch local.properties
+          fi
+
+          if [ -n "$LOCAL_DEV_PROPERTIES_BASE64" ]; then
+            printf '%s' "$LOCAL_DEV_PROPERTIES_BASE64" | base64 --decode > local.dev.properties
+          else
+            touch local.dev.properties
+          fi
+
+          KEYSTORE_PATH="$RUNNER_TEMP/cincintv-release.jks"
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            echo "Using repository secret keystore NUVIO_RELEASE_KEYSTORE_BASE64..."
+            printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            KEY_ALIAS="${RELEASE_KEY_ALIAS:-nuviotv}"
+            KEY_PASS="${RELEASE_KEY_PASSWORD:-815787}"
+            STORE_PASS="${RELEASE_STORE_PASSWORD:-815787}"
+          else
+            echo "Generating deterministic release keystore for CinCin TV..."
+            keytool -genkeypair \
+              -v \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass 815787 \
+              -alias cincintv \
+              -keypass 815787 \
+              -dname "CN=CinCin TV,O=CinCin,C=US" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000
+            KEY_ALIAS="cincintv"
+            KEY_PASS="815787"
+            STORE_PASS="815787"
+          fi
+
+          sed -i -E '/^[[:space:]]*(sdk\.dir|NUVIO_RELEASE_STORE_FILE|NUVIO_RELEASE_KEY_ALIAS|NUVIO_RELEASE_KEY_PASSWORD|NUVIO_RELEASE_STORE_PASSWORD)[[:space:]]*=/d' local.properties
+          {
+            echo "NUVIO_RELEASE_STORE_FILE=$KEYSTORE_PATH"
+            echo "NUVIO_RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "NUVIO_RELEASE_KEY_PASSWORD=$KEY_PASS"
+            echo "NUVIO_RELEASE_STORE_PASSWORD=$STORE_PASS"
+          } >> local.properties
+
+      - name: Build Full Release APKs (Android & Android TV)
+        run: ./gradlew :app:assembleFullRelease --stacktrace
+
+      - name: Rename APKs for Android & Android TV Release
+        id: package_apks
+        env:
+          VER: ${{ steps.meta.outputs.version }}
+        run: |
+          OUT_DIR="release-assets"
+          mkdir -p "$OUT_DIR"
+          APK_DIR="app/build/outputs/apk/full/release"
+
+          # Copy & rename Universal APK (Android Mobile / Tablet / Android TV)
+          if [ -f "$APK_DIR/app-full-universal-release.apk" ]; then
+            cp "$APK_DIR/app-full-universal-release.apk" "$OUT_DIR/CinCinTV-v${VER}-Android-and-TV-universal.apk"
+          fi
+
+          # Copy & rename ABI-specific APKs (compatible with in-app updater AbiSelector)
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            if [ -f "$APK_DIR/app-full-${abi}-release.apk" ]; then
+              cp "$APK_DIR/app-full-${abi}-release.apk" "$OUT_DIR/CinCinTV-v${VER}-Android-and-TV-${abi}.apk"
+            fi
+          done
+
+          cd "$OUT_DIR"
+          sha256sum *.apk > SHA256SUMS.txt
+          ls -lh
+
+      - name: Upload Release APKs as Workflow Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CinCinTV-v${{ steps.meta.outputs.version }}-APKs
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VER: ${{ steps.meta.outputs.version }}
+          CODE: ${{ steps.meta.outputs.version_code }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          IS_DRAFT: ${{ inputs.draft }}
+        run: |
+          cat << 'EOF' > release-notes.md
+          ## 🎬 CinCin TV v${VER} (Android & Android TV)
+
+          ### ✨ Highlights
+          - **Offline Enriched Bilingual Kids & Family Catalog:** `1,316` Movies & Series (`54,295` episodes) pre-bundled in `HCD2` binary format.
+          - **Multi-Server Failover (`Main Server` + `Backup Server`):**
+            - `CinCin TV 720p HD (Main Server)` — Direct high-speed MP4 streams (Primary CDN)
+            - `CinCin TV 720p HD (Backup Server)` — Permanent Secondary CDN fallback (`7,800+` dual-server episodes + `275` exclusive titles)
+            - `CinCin TV 360p (Data Saver)` — Low-data stream option
+          - **Automatic & Manual Server Switching:** Seamless failover on playback error or manual selection via the in-player **Sources** menu.
+
+          ### 📦 Which APK should I download?
+          | Device Type | Recommended File |
+          | :--- | :--- |
+          | **New Chromecast / Google TV / Nvidia Shield / Modern Android Phones (`64-bit`)** | `CinCinTV-v${VER}-Android-and-TV-arm64-v8a.apk` |
+          | **Standard Android TV Boxes / Mi Box / Fire TV Stick / Older TVs (`32-bit`)** | `CinCinTV-v${VER}-Android-and-TV-armeabi-v7a.apk` |
+          | **All Devices (Universal Installer for Android Mobile, Tablet & Android TV)** | `CinCinTV-v${VER}-Android-and-TV-universal.apk` |
+          | **PC / Emulators (`x86_64` / `x86`)** | `CinCinTV-v${VER}-Android-and-TV-x86_64.apk` |
+          EOF
+
+          sed -i "s/\${VER}/${VER}/g" release-notes.md
+
+          ARGS=("$TAG" --title "CinCin TV v${VER} (Build ${CODE})" --notes-file release-notes.md)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            ARGS+=(--prerelease)
+          fi
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            ARGS+=(--draft)
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists, uploading/clobbering assets..."
+            gh release upload "$TAG" release-assets/* --clobber
+            gh release edit "$TAG" --title "CinCin TV v${VER} (Build ${CODE})" --notes-file release-notes.md
+          else
+            gh release create "${ARGS[@]}" release-assets/*
+          fi
