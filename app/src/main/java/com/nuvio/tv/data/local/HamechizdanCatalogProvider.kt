@@ -43,6 +43,8 @@ class HamechizdanCatalogProvider @Inject constructor(
         const val ID_PREFIX = "hcd:"
         const val PERSONALIZED_CATALOG_ID = "hcd_recommended"
         const val PERSONALIZED_CATALOG_NAME = "Recommended from Favorites"
+        const val PERSONALIZED_MOVIES_CATALOG_ID = "hcd_movies_recommended"
+        const val PERSONALIZED_MOVIES_CATALOG_NAME = "Recommended Movies from Favorites"
         private const val PERSONALIZED_RESULT_LIMIT = 40
         private const val ASSET_FILE_NAME = "hamechizdan_catalog.bin"
         private const val LEGACY_ASSET_FILE_NAME = "hamechizdan_catalog.json.gz"
@@ -336,6 +338,16 @@ class HamechizdanCatalogProvider @Inject constructor(
                 extraSupported = listOf("skip")
             ),
             CatalogDescriptor(
+                type = ContentType.MOVIE,
+                rawType = "movie",
+                id = PERSONALIZED_MOVIES_CATALOG_ID,
+                name = PERSONALIZED_MOVIES_CATALOG_NAME,
+                pageSize = PERSONALIZED_RESULT_LIMIT,
+                showInHome = true,
+                hasExplicitShowInHome = true,
+                extraSupported = listOf("skip")
+            ),
+            CatalogDescriptor(
                 type = ContentType.SERIES,
                 rawType = "series",
                 id = "hcd_en_toddler",
@@ -474,11 +486,14 @@ class HamechizdanCatalogProvider @Inject constructor(
         val searchQuery = extraArgs["search"]?.trim().orEmpty()
         val genreFilter = extraArgs["genre"]?.trim().orEmpty()
 
-        val filteredByCatalog = if (catalogId == PERSONALIZED_CATALOG_ID) {
+        val filteredByCatalog = if (catalogId == PERSONALIZED_CATALOG_ID ||
+            catalogId == PERSONALIZED_MOVIES_CATALOG_ID
+        ) {
             buildPersonalizedRecommendations(
                 allItems = allItems,
                 favoriteIds = parseJsonStringList(extraArgs["favoriteIds"]),
-                favoriteNames = parseJsonStringList(extraArgs["favoriteNames"])
+                favoriteNames = parseJsonStringList(extraArgs["favoriteNames"]),
+                recommendedType = if (catalogId == PERSONALIZED_MOVIES_CATALOG_ID) "movie" else "series"
             )
         } else if (searchQuery.isNotEmpty()) {
             // Search within each primary language/type catalog separately so English, German, French, etc.
@@ -830,7 +845,8 @@ class HamechizdanCatalogProvider @Inject constructor(
     private fun buildPersonalizedRecommendations(
         allItems: List<CompactItem>,
         favoriteIds: List<String>,
-        favoriteNames: List<String>
+        favoriteNames: List<String>,
+        recommendedType: String
     ): List<CompactItem> {
         val favoriteNameKeys = favoriteNames.mapTo(hashSetOf(), ::normalizedTitle)
         val favoriteItems = LinkedHashSet<CompactItem>()
@@ -843,7 +859,7 @@ class HamechizdanCatalogProvider @Inject constructor(
         val favoriteIdsCanonical = favoriteItems.mapTo(hashSetOf(), ::canonicalRecommendationKey)
         val excludedNames = favoriteNameKeys + favoriteItems.map { normalizedTitle(it.titleEn) }
         val candidates = allItems.asSequence()
-            .filter { it.type.equals("series", ignoreCase = true) && it.language == "انگلیسی" }
+            .filter { it.type.equals(recommendedType, ignoreCase = true) && it.language == "انگلیسی" }
             .filterNot { canonicalRecommendationKey(it) in favoriteIdsCanonical }
             .filterNot { normalizedTitle(it.titleEn) in excludedNames }
             .distinctBy(::canonicalRecommendationKey)

@@ -1,5 +1,6 @@
 package com.nuvio.tv.ui.screens.home
 
+import com.nuvio.tv.data.local.HamechizdanCatalogProvider
 import com.nuvio.tv.domain.model.catalogTypeKey
 import com.nuvio.tv.domain.model.catalogRowLegacyKey
 import com.nuvio.tv.domain.model.Addon
@@ -304,6 +305,39 @@ internal fun HomeViewModel.rebuildCatalogOrder(addons: List<Addon>) {
         synchronized(catalogStateLock) {
             catalogOrder.clear()
             catalogOrder.addAll(mergedOrder)
+        }
+    }
+
+    // Personalized recommendations always lead the catalog rows regardless of saved
+    // order or addon order mode. Continue Watching is rendered separately before these rows.
+    val recommendationIds = listOf(
+        HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID,
+        HamechizdanCatalogProvider.PERSONALIZED_MOVIES_CATALOG_ID
+    )
+    val currentOrder = synchronized(catalogStateLock) { catalogOrder.toList() }
+    val prioritizedKeys = recommendationIds.flatMap { recommendationId ->
+        addons.flatMap { addon ->
+            addon.catalogs
+                .filter { catalog ->
+                    catalog.id == recommendationId && catalog.shouldShowOnHome() &&
+                        !isCatalogDisabled(
+                            addonBaseUrl = addon.baseUrl,
+                            addonId = addon.id,
+                            type = catalog.apiType,
+                            catalogId = catalog.id,
+                            catalogName = catalog.name
+                        )
+                }
+                .map { catalog ->
+                    catalogKey(addonId = addon.id, type = catalog.apiType, catalogId = catalog.id)
+                }
+        }
+    }.filter { it in currentOrder }
+    if (prioritizedKeys.isNotEmpty()) {
+        val prioritizedSet = prioritizedKeys.toSet()
+        synchronized(catalogStateLock) {
+            catalogOrder.clear()
+            catalogOrder.addAll(prioritizedKeys + currentOrder.filterNot { it in prioritizedSet })
         }
     }
 }

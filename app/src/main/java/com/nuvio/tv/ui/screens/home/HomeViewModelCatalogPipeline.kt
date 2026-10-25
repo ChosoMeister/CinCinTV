@@ -438,7 +438,9 @@ internal fun HomeViewModel.loadCatalogPipeline(
                 skip = 0,
                 skipStep = skipStep,
                 supportsSkip = supportsSkip,
-                extraArgs = if (catalog.id == HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID) {
+                extraArgs = if (catalog.id == HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID ||
+                    catalog.id == HamechizdanCatalogProvider.PERSONALIZED_MOVIES_CATALOG_ID
+                ) {
                     val favorites = libraryRepository.libraryItems.first()
                     mapOf(
                         "favoriteIds" to Gson().toJson(
@@ -537,17 +539,24 @@ internal fun HomeViewModel.loadCatalogPipeline(
 internal fun HomeViewModel.refreshPersonalizedRecommendationsPipeline() {
     val addon = addonsCache.firstOrNull { HamechizdanCatalogProvider.isHamechizdanAddon(it.baseUrl) }
         ?: return
-    val catalog = addon.catalogs.firstOrNull {
-        it.id == HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID
-    } ?: return
-    val key = catalogKey(addonId = addon.id, type = catalog.apiType, catalogId = catalog.id)
-    if (readCatalogRow(key) == null) return
-    pendingCatalogLoads += 1
-    loadCatalogPipeline(
-        addon = addon,
-        catalog = catalog,
-        generation = catalogLoadGeneration
+    val personalizedIds = setOf(
+        HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID,
+        HamechizdanCatalogProvider.PERSONALIZED_MOVIES_CATALOG_ID
     )
+    val loadedCatalogs = addon.catalogs.filter { catalog ->
+        if (catalog.id !in personalizedIds) return@filter false
+        val key = catalogKey(addonId = addon.id, type = catalog.apiType, catalogId = catalog.id)
+        readCatalogRow(key) != null
+    }
+    if (loadedCatalogs.isEmpty()) return
+    pendingCatalogLoads += loadedCatalogs.size
+    loadedCatalogs.forEach { catalog ->
+        loadCatalogPipeline(
+            addon = addon,
+            catalog = catalog,
+            generation = catalogLoadGeneration
+        )
+    }
 }
 
 internal fun HomeViewModel.loadMoreCatalogItemsPipeline(catalogId: String, addonId: String, type: String) {
