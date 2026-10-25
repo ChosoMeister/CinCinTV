@@ -132,7 +132,9 @@ internal fun HomeViewModel.observeTmdbSettingsPipeline() {
 internal fun HomeViewModel.observeInstalledAddonsPipeline() {
     viewModelScope.launch {
         combine(addonRepository.getInstalledAddons(), serverCatalog.addons) { installed, servers ->
-            installed.enabledAddons() + servers
+            (installed.enabledAddons() + servers).filter { addon ->
+                HamechizdanCatalogProvider.isBundledDatabaseAddon(addon.id, addon.baseUrl)
+            }
         }
             .distinctUntilChanged()
             .collectLatest { addons ->

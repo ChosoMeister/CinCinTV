@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.nuvio.tv.R
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.data.local.DiscoverSelectionDataStore
+import com.nuvio.tv.data.local.HamechizdanCatalogProvider
 import com.nuvio.tv.data.local.LayoutPreferenceDataStore
 import com.nuvio.tv.data.local.SearchHistoryDataStore
 import com.nuvio.tv.data.mediaserver.ServerCatalog
@@ -897,7 +898,9 @@ class SearchViewModel @Inject constructor(
     }
 
     private suspend fun searchAddons(): List<Addon> =
-        addonRepository.getInstalledAddons().first().enabledAddons() + serverCatalog.searchAddons.first()
+        addonRepository.getInstalledAddons().first().enabledAddons().filter { addon ->
+            HamechizdanCatalogProvider.isBundledDatabaseAddon(addon.id, addon.baseUrl)
+        }
 
     private suspend fun loadDiscoverCatalogs() {
         if (_uiState.value.discoverLocation == DiscoverLocation.OFF) return

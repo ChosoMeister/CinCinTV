@@ -71,6 +71,10 @@ class HamechizdanCatalogProvider @Inject constructor(
                 clean.startsWith("hamechizdan://")
         }
 
+        /** The bundled catalog contains both Hamechizdan and iToons database entries. */
+        fun isBundledDatabaseAddon(addonId: String?, baseUrl: String?): Boolean =
+            isHamechizdanAddon(addonId) || isHamechizdanAddon(baseUrl)
+
         fun isHamechizdanItemId(id: String?): Boolean {
             if (id.isNullOrBlank()) return false
             return id.trim().startsWith(ID_PREFIX, ignoreCase = true)
