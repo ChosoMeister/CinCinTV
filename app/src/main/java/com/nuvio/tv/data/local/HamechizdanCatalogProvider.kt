@@ -41,6 +41,9 @@ class HamechizdanCatalogProvider @Inject constructor(
         const val ADDON_NAME = "CinCin TV"
         const val ADDON_BASE_URL = "https://hamechizdan.local"
         const val ID_PREFIX = "hcd:"
+        const val PERSONALIZED_CATALOG_ID = "hcd_recommended"
+        const val PERSONALIZED_CATALOG_NAME = "Recommended from Favorites"
+        private const val PERSONALIZED_RESULT_LIMIT = 40
         private const val ASSET_FILE_NAME = "hamechizdan_catalog.bin"
         private const val LEGACY_ASSET_FILE_NAME = "hamechizdan_catalog.json.gz"
         private const val UNCOMPRESSED_ASSET_FILE_NAME = "hamechizdan_catalog.json"
@@ -321,6 +324,16 @@ class HamechizdanCatalogProvider @Inject constructor(
             CatalogDescriptor(
                 type = ContentType.SERIES,
                 rawType = "series",
+                id = PERSONALIZED_CATALOG_ID,
+                name = PERSONALIZED_CATALOG_NAME,
+                pageSize = PERSONALIZED_RESULT_LIMIT,
+                showInHome = true,
+                hasExplicitShowInHome = true,
+                extraSupported = listOf("skip")
+            ),
+            CatalogDescriptor(
+                type = ContentType.SERIES,
+                rawType = "series",
                 id = "hcd_en_toddler",
                 name = "English • Toddlers (Ages 1-4)",
                 extra = englishSeriesExtras,
@@ -457,7 +470,13 @@ class HamechizdanCatalogProvider @Inject constructor(
         val searchQuery = extraArgs["search"]?.trim().orEmpty()
         val genreFilter = extraArgs["genre"]?.trim().orEmpty()
 
-        val filteredByCatalog = if (searchQuery.isNotEmpty()) {
+        val filteredByCatalog = if (catalogId == PERSONALIZED_CATALOG_ID) {
+            buildPersonalizedRecommendations(
+                allItems = allItems,
+                favoriteIds = parseJsonStringList(extraArgs["favoriteIds"]),
+                favoriteNames = parseJsonStringList(extraArgs["favoriteNames"])
+            )
+        } else if (searchQuery.isNotEmpty()) {
             // Search within each primary language/type catalog separately so English, German, French, etc.
             // are never mixed together in search results!
             val searchableCatalogs = setOf(
@@ -789,6 +808,136 @@ class HamechizdanCatalogProvider @Inject constructor(
                 .let(::sortByRatingAndPopularity)
             else -> items.filter { it.type.equals(type, ignoreCase = true) }
         }
+    }
+
+    private fun parseJsonStringList(value: String?): List<String> {
+        if (value.isNullOrBlank()) return emptyList()
+        return runCatching { gson.fromJson(value, Array<String>::class.java)?.toList().orEmpty() }
+            .getOrDefault(emptyList())
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+    }
+
+    /**
+     * Build a profile-specific discovery row. Favorites are resolved against the bundled catalog
+     * by HCD/IMDb/TMDB ID first and by an exact normalized title as a fallback. Unrated items are
+     * retained only when needed to reach 40 and always rank after rated titles.
+     */
+    private fun buildPersonalizedRecommendations(
+        allItems: List<CompactItem>,
+        favoriteIds: List<String>,
+        favoriteNames: List<String>
+    ): List<CompactItem> {
+        val favoriteNameKeys = favoriteNames.mapTo(hashSetOf(), ::normalizedTitle)
+        val favoriteItems = LinkedHashSet<CompactItem>()
+        favoriteIds.forEach { id -> resolveItemById(id)?.let(favoriteItems::add) }
+        if (favoriteNameKeys.isNotEmpty()) {
+            allItems.filterTo(favoriteItems) { normalizedTitle(it.titleEn) in favoriteNameKeys }
+        }
+        if (favoriteItems.isEmpty()) return emptyList()
+
+        val favoriteIdsCanonical = favoriteItems.mapTo(hashSetOf(), ::canonicalRecommendationKey)
+        val excludedNames = favoriteNameKeys + favoriteItems.map { normalizedTitle(it.titleEn) }
+        val candidates = allItems.asSequence()
+            .filter { it.type.equals("series", ignoreCase = true) && it.language == "انگلیسی" }
+            .filterNot { canonicalRecommendationKey(it) in favoriteIdsCanonical }
+            .filterNot { normalizedTitle(it.titleEn) in excludedNames }
+            .distinctBy(::canonicalRecommendationKey)
+            .toList()
+        if (candidates.isEmpty()) return emptyList()
+
+        val favoriteTopicCounts = mutableMapOf<String, Int>()
+        favoriteItems.forEach { favorite ->
+            recommendationTopics(favorite).forEach { topic ->
+                favoriteTopicCounts[topic] = (favoriteTopicCounts[topic] ?: 0) + 1
+            }
+        }
+        val totalTopicWeight = favoriteTopicCounts.values.sum().coerceAtLeast(1)
+        val favoriteAgeRanges = favoriteItems.mapNotNull(::recommendationAgeRange)
+        val preferredAccent = favoriteItems.mapNotNull { it.accent?.takeIf(String::isNotBlank) }
+            .groupingBy { it }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.key
+
+        val maxLogPopularity = candidates.maxOfOrNull { item ->
+            ln1p(item.popularity?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0)
+        } ?: 0.0
+
+        fun score(item: CompactItem): Double {
+            val itemTopics = recommendationTopics(item)
+            val topicFit = if (favoriteTopicCounts.isEmpty() || itemTopics.isEmpty()) {
+                0.0
+            } else {
+                itemTopics.sumOf { (favoriteTopicCounts[it] ?: 0).toDouble() } / totalTopicWeight
+            }.coerceIn(0.0, 1.0)
+            val ageRange = recommendationAgeRange(item)
+            val ageFit = when {
+                favoriteAgeRanges.isEmpty() || ageRange == null -> 0.5
+                favoriteAgeRanges.any { (min, max) -> ageRange.first <= max && ageRange.second >= min } -> 1.0
+                else -> 0.0
+            }
+            val accentFit = if (preferredAccent != null && item.accent == preferredAccent) 1.0 else 0.0
+            val rating = item.rating?.takeIf { it.isFinite() && it > 0f }?.toDouble()
+            val votes = item.voteCount?.coerceAtLeast(0) ?: 0
+            val trustedRating = rating?.let { (it * votes + 6.5 * 30.0) / (votes + 30.0) } ?: 0.0
+            val popularity = item.popularity?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+            val popularityFit = if (maxLogPopularity > 0.0) ln1p(popularity) / maxLogPopularity else 0.0
+
+            // Favorites drive discovery; age fit protects the child-oriented audience while
+            // rating confidence and popularity help order otherwise similar suggestions.
+            return (topicFit * 0.45) + (ageFit * 0.20) + (accentFit * 0.05) +
+                ((trustedRating / 10.0) * 0.22) + (popularityFit * 0.08)
+        }
+
+        return candidates.sortedWith(
+            compareByDescending<CompactItem> { it.rating?.takeIf { value -> value.isFinite() && value > 0f } != null }
+                .thenByDescending(::score)
+                .thenByDescending { it.rating?.takeIf { value -> value.isFinite() && value > 0f } ?: Float.NEGATIVE_INFINITY }
+                .thenByDescending { it.popularity?.takeIf { value -> value.isFinite() && value > 0.0 } ?: 0.0 }
+                .thenBy { it.titleEn.lowercase() }
+        ).take(PERSONALIZED_RESULT_LIMIT)
+    }
+
+    private fun canonicalRecommendationKey(item: CompactItem): String = when {
+        item.tmdbId != null && item.tmdbId > 0 -> "tmdb:${item.tmdbId}"
+        !item.imdbId.isNullOrBlank() -> "imdb:${item.imdbId.trim().lowercase()}"
+        else -> "title:${normalizedTitle(item.titleEn)}"
+    }
+
+    private fun normalizedTitle(title: String): String = title
+        .lowercase()
+        .replace(Regex("[^a-z0-9]+"), " ")
+        .trim()
+        .replace(Regex("\\s+"), " ")
+
+    private fun recommendationTopics(item: CompactItem): Set<String> {
+        val text = buildString {
+            append(item.titleEn).append(' ')
+            append(item.overviewEn.orEmpty()).append(' ')
+            append(item.genres.joinToString(" "))
+        }.lowercase()
+        val topicKeywords = mapOf(
+            "math" to listOf("math", "number", "count", "counting", "shape", "geometry", "addition", "subtract", "measure", "pattern"),
+            "science" to listOf("science", "experiment", "discovery", "discover", "space", "planet", "technology", "invent", "engineering"),
+            "nature" to listOf("animal", "wildlife", "ocean", "sea", "nature", "environment", "forest", "zoo", "habitat", "earth"),
+            "literacy" to listOf("word", "letter", "reading", "read", "story", "book", "spelling", "language", "vocabulary"),
+            "social" to listOf("friend", "friendship", "family", "emotion", "feel", "share", "kindness", "community", "school", "everyday"),
+            "problem_solving" to listOf("solve", "problem", "mystery", "puzzle", "clue", "rescue", "mission", "teamwork"),
+            "music" to listOf("music", "song", "sing", "dance", "rhythm", "instrument")
+        )
+        val textWords = text.split(Regex("[^a-z0-9]+")).toHashSet()
+        return topicKeywords.mapNotNullTo(linkedSetOf()) { (topic, words) ->
+            topic.takeIf { words.any(textWords::contains) }
+        }
+    }
+
+    private fun recommendationAgeRange(item: CompactItem): Pair<Int, Int>? {
+        val age = item.ageGroup ?: return null
+        val match = AGE_RANGE_REGEX.find(age) ?: return null
+        val start = match.groupValues[1].toIntOrNull() ?: return null
+        val end = match.groupValues[2].toIntOrNull() ?: return null
+        return minOf(start, end) to maxOf(start, end)
     }
 
     /**

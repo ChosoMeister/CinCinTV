@@ -2,7 +2,9 @@ package com.nuvio.tv.ui.screens.home
 
 import android.util.Log
 import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
 import com.nuvio.tv.R
+import com.nuvio.tv.data.local.HamechizdanCatalogProvider
 import com.nuvio.tv.core.network.NetworkResult
 import com.nuvio.tv.domain.model.Addon
 import com.nuvio.tv.domain.model.CatalogDescriptor
@@ -433,7 +435,24 @@ internal fun HomeViewModel.loadCatalogPipeline(
                 type = catalog.apiType,
                 skip = 0,
                 skipStep = skipStep,
-                supportsSkip = supportsSkip
+                supportsSkip = supportsSkip,
+                extraArgs = if (catalog.id == HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID) {
+                    val favorites = libraryRepository.libraryItems.first()
+                    mapOf(
+                        "favoriteIds" to Gson().toJson(
+                            favorites.flatMap { item ->
+                                buildList {
+                                    add(item.id)
+                                    item.imdbId?.let { add("imdb:$it") }
+                                    item.tmdbId?.let { add("tmdb:$it") }
+                                }
+                            }.distinct()
+                        ),
+                        "favoriteNames" to Gson().toJson(favorites.map { it.name })
+                    )
+                } else {
+                    emptyMap()
+                }
             ).collect { result ->
                 if (generation != catalogLoadGeneration) return@collect
                 when (result) {
@@ -511,6 +530,22 @@ internal fun HomeViewModel.loadCatalogPipeline(
         }
     }
     registerCatalogLoadJob(loadJob)
+}
+
+internal fun HomeViewModel.refreshPersonalizedRecommendationsPipeline() {
+    val addon = addonsCache.firstOrNull { HamechizdanCatalogProvider.isHamechizdanAddon(it.baseUrl) }
+        ?: return
+    val catalog = addon.catalogs.firstOrNull {
+        it.id == HamechizdanCatalogProvider.PERSONALIZED_CATALOG_ID
+    } ?: return
+    val key = catalogKey(addonId = addon.id, type = catalog.apiType, catalogId = catalog.id)
+    if (readCatalogRow(key) == null) return
+    pendingCatalogLoads += 1
+    loadCatalogPipeline(
+        addon = addon,
+        catalog = catalog,
+        generation = catalogLoadGeneration
+    )
 }
 
 internal fun HomeViewModel.loadMoreCatalogItemsPipeline(catalogId: String, addonId: String, type: String) {

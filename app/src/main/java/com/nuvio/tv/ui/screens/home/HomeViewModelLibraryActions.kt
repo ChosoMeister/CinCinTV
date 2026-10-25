@@ -11,13 +11,25 @@ import com.nuvio.tv.domain.model.LibrarySourceMode
 import com.nuvio.tv.domain.model.ListMembershipChanges
 import com.nuvio.tv.domain.model.MetaPreview
 import com.nuvio.tv.domain.model.WatchProgress
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+@OptIn(FlowPreview::class)
 internal fun HomeViewModel.observeLibraryState() {
+    viewModelScope.launch {
+        libraryRepository.libraryItems
+            .distinctUntilChanged()
+            .debounce(300L)
+            .collectLatest {
+                refreshPersonalizedRecommendationsPipeline()
+            }
+    }
+
     viewModelScope.launch {
         libraryRepository.sourceMode
             .distinctUntilChanged()
