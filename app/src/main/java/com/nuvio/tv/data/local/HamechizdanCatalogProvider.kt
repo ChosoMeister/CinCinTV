@@ -25,6 +25,7 @@ import java.io.InputStreamReader
 import java.util.zip.GZIPInputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.math.ln1p
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -132,6 +133,8 @@ class HamechizdanCatalogProvider @Inject constructor(
         @SerializedName("runtime") val runtimeMinutes: Int? = null,
         @SerializedName("imdb") val imdbId: String? = null,
         @SerializedName("tmdbId") val tmdbId: Int? = null,
+        @SerializedName("votes") val voteCount: Int? = null,
+        @SerializedName("pop") val popularity: Double? = null,
         @SerializedName("genres") val genres: List<String> = emptyList(),
         @SerializedName("eps") val episodes: List<CompactEpisode> = emptyList()
     )
@@ -744,7 +747,9 @@ class HamechizdanCatalogProvider @Inject constructor(
             "3 تا 5 سال"
         )
         return when (catalogId) {
-            "hcd_movies" -> items.filter { it.type.equals("movie", ignoreCase = true) }
+            "hcd_movies" -> sortByRatingAndPopularity(
+                items.filter { it.type.equals("movie", ignoreCase = true) }
+            )
             "hcd_en_toddler" -> items
                 .filter { item ->
                     item.type.equals("series", ignoreCase = true) &&
@@ -752,38 +757,82 @@ class HamechizdanCatalogProvider @Inject constructor(
                         (item.ageGroup in toddlerAges ||
                             item.badges.any { it.contains("1 تا ") || it.contains("2 تا ") })
                 }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_en_kids" -> items
                 .filter { item ->
                     item.type.equals("series", ignoreCase = true) &&
                         item.language == "انگلیسی" &&
                         item.ageGroup !in toddlerAges
                 }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_en_british" -> items
                 .filter { item ->
                     item.type.equals("series", ignoreCase = true) &&
                         item.language == "انگلیسی" &&
                         item.accent == "لهجه بریتانیایی"
                 }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_french" -> items
                 .filter { it.language == "فرانسوی" }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_german" -> items
                 .filter { it.language == "آلمانی" }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_arabic" -> items
                 .filter { it.language == "عربی" }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_chinese" -> items
                 .filter { it.language == "چینی" }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             "hcd_all_series" -> items
                 .filter { it.type.equals("series", ignoreCase = true) && it.language == "انگلیسی" }
-                .sortedByDescending { it.episodes.size }
+                .let(::sortByRatingAndPopularity)
             else -> items.filter { it.type.equals(type, ignoreCase = true) }
         }
+    }
+
+    /**
+     * Keep unrated titles at the end. For rated titles, blend a vote-count-smoothed
+     * rating (85%) with logarithmically normalized TMDB popularity (15%).
+     * Episode count is only a stable tie-breaker, not a substitute for popularity.
+     */
+    private fun sortByRatingAndPopularity(items: List<CompactItem>): List<CompactItem> {
+        if (items.size < 2) return items
+
+        val maxLogPopularity = items.maxOfOrNull { item ->
+            ln1p(item.popularity?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0)
+        } ?: 0.0
+
+        fun rating(item: CompactItem): Double? =
+            item.rating?.takeIf { it.isFinite() && it > 0f }?.toDouble()
+
+        fun popularity(item: CompactItem): Double =
+            item.popularity?.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+
+        fun combinedScore(item: CompactItem): Double? {
+            val rating = rating(item) ?: return null
+            val votes = item.voteCount?.coerceAtLeast(0) ?: 0
+            val smoothedRating = if (votes > 0) {
+                (rating * votes + 6.5 * 30.0) / (votes + 30.0)
+            } else {
+                rating
+            }
+            val popularityScore = if (maxLogPopularity > 0.0) {
+                10.0 * ln1p(popularity(item)) / maxLogPopularity
+            } else {
+                0.0
+            }
+            return smoothedRating * 0.85 + popularityScore * 0.15
+        }
+
+        return items.sortedWith(
+            compareByDescending<CompactItem> { rating(it) != null }
+                .thenByDescending { combinedScore(it) ?: Double.NEGATIVE_INFINITY }
+                .thenByDescending { rating(it) ?: Double.NEGATIVE_INFINITY }
+                .thenByDescending { popularity(it) }
+                .thenByDescending { it.episodes.size }
+                .thenBy { it.titleEn.lowercase() }
+        )
     }
 
     private fun matchesGenreFilter(item: CompactItem, genreFilter: String): Boolean {

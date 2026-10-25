@@ -896,6 +896,8 @@ async function main() {
       year: t.release_year || c.year || null,
       rel: t.release_date || null,
       rating: t.rating || null,
+      votes: t.vote_count || null,
+      pop: t.popularity || null,
       runtime: t.runtime_minutes || null,
       imdb: t.imdb_id || null,
       tmdbId: t.tmdb_id || null,
